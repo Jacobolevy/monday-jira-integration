@@ -29,9 +29,9 @@ const LABEL_MAPPING = {
 
     "Format Issue": {
         keywords: {
-            "currency|€|\\$|£|¥|symbol|price|cost|amount|thousand|decimal|separator": "Productloc-format-currency",
-            "address|street|city|region|country|postal|zip|state|province": "Productloc-format-address",
-            "date|time|hour|minute|AM|PM|24h|12h|timezone|GMT|UTC|day|month|year": "Productloc-format-time",
+            "currency|€|\\$|£|¥|symbol|price|cost|amounts?|thousand|decimal|separator": "Productloc-format-currency",
+            "\\baddress\\b|street|city|region|country|postal|zip|state|province": "Productloc-format-address",
+            "\\bdate\\b|\\btime\\b|\\bhour\\b|\\bminute\\b|\\bAM\\b|\\bPM\\b|24h|12h|timezone|GMT|UTC": "Productloc-format-time",
             "spacing|punctuation|quote|ellips|comma|period|colon|semicolon|dash|hyphen": "Productloc-format-text",
             "parameter|variable|placeholder|\\{|\\}|%s|%d|token|dynamic": "Productloc-format-parameters"
         },
