@@ -92,13 +92,45 @@ const LABEL_MAPPING = {
 };
 
 /**
+ * Normalize Type of Issue to match mapping keys
+ * Handles variations like "Format issues" vs "Format Issue"
+ */
+function normalizeTypeOfIssue(typeOfIssue) {
+  if (!typeOfIssue) return null;
+  
+  const normalized = typeOfIssue.toLowerCase().trim();
+  
+  // Map variations to canonical names
+  const aliases = {
+    "ui issue": "UI issue",
+    "ui issues": "UI issue",
+    "format issue": "Format Issue",
+    "format issues": "Format Issue",
+    "text in english": "Text in English",
+    "icu": "ICU",
+    "icu issue": "ICU",
+    "icu issues": "ICU",
+    "screenshot has different content": "Screenshot has different content",
+    "smartling has different content": "Smartling has different content",
+    "ga issue": "GA issue",
+    "ga issues": "GA issue",
+    "general flow": "General flow",
+    "kb article": "KB article",
+    "kb articles": "KB article"
+  };
+  
+  return aliases[normalized] || typeOfIssue;
+}
+
+/**
  * Select Jira labels based on Type of Issue and keywords in issue name/description
  */
 function selectLabels(typeOfIssue, issueName, description = '') {
-  const config = LABEL_MAPPING[typeOfIssue];
+  const normalizedType = normalizeTypeOfIssue(typeOfIssue);
+  const config = LABEL_MAPPING[normalizedType];
   
   if (!config) {
-    console.log(`Unknown Type of Issue: "${typeOfIssue}", using fallback`);
+    console.log(`Unknown Type of Issue: "${typeOfIssue}" (normalized: "${normalizedType}"), using fallback`);
     return ["Productloc-bug"];
   }
   
