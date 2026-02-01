@@ -1,0 +1,148 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "monday-trigger",
+        "options": {}
+      },
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "boardItem",
+        "operation": "get",
+        "itemId": "={{$json.body.event.pulseId}}",
+        "returnFields": [
+          "name",
+          "parent_item",
+          "column_values"
+        ]
+      },
+      "name": "Get Subitem",
+      "type": "n8n-nodes-base.mondayCom",
+      "typeVersion": 1,
+      "position": [
+        450,
+        300
+      ],
+      "credentials": {
+        "mondayComApi": {
+          "id": "YOUR_MONDAY_CREDENTIAL_ID",
+          "name": "Monday.com account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "boardItem",
+        "operation": "get",
+        "itemId": "={{$json.parent_item.id}}",
+        "returnFields": [
+          "column_values"
+        ]
+      },
+      "name": "Get Parent Item",
+      "type": "n8n-nodes-base.mondayCom",
+      "typeVersion": 1,
+      "position": [
+        650,
+        300
+      ],
+      "credentials": {
+        "mondayComApi": {
+          "id": "YOUR_MONDAY_CREDENTIAL_ID",
+          "name": "Monday.com account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Logic to parse Project Key and Updates\nconst parentCols = items[0].json.column_values;\nconst projectLinkCol = parentCols.find(c => c.id === 'link_mkz3e37y');\nlet projectKey = 'DOM2'; // Fallback\n\nif (projectLinkCol && projectLinkCol.value) {\n  try {\n    const urlVal = JSON.parse(projectLinkCol.value).url;\n    const match = urlVal.match(/selectedIssue=([A-Z0-9]+)-/);\n    if (match) projectKey = match[1];\n  } catch(e) {}\n}\n\n// Logic for Screenshot (Assuming we might fetch updates in another node or mock it here)\nconst screenshotLink = 'http://example.com/screenshot.png'; // Update this logic if adding specific Update Fetch node\n\nreturn {\n  projectKey,\n  summary: '[LOC] ' + $('Get Subitem').item.json.name,\n  description: 'Automated ticket from Monday. Screenshot: ' + screenshotLink,\n  issuetype: 'Bug'\n};"
+      },
+      "name": "Prepare Data",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        850,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "project": "={{$json.projectKey}}",
+        "issueType": "={{$json.issuetype}}",
+        "summary": "={{$json.summary}}",
+        "description": "={{$json.description}}",
+        "additionalFields": {
+          "labels": []
+        }
+      },
+      "name": "Jira Cloud",
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        1050,
+        300
+      ],
+      "credentials": {
+        "jiraSoftwareCloudOAuth2Api": {
+          "id": "YOUR_JIRA_CREDENTIAL_ID",
+          "name": "Jira Cloud account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Get Subitem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Subitem": {
+      "main": [
+        [
+          {
+            "node": "Get Parent Item",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Parent Item": {
+      "main": [
+        [
+          {
+            "node": "Prepare Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Data": {
+      "main": [
+        [
+          {
+            "node": "Jira Cloud",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
