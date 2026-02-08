@@ -165,16 +165,25 @@ function App() {
   useEffect(() => {
     monday.execute('valueCreatedForUser');
 
-    // Get current user's email for Jira reporter field
-    monday.api('query { me { email } }').then((res) => {
-      if (res.data?.me?.email) {
-        setUserEmail(res.data.me.email);
-        console.log('Current user email:', res.data.me.email);
-      }
-    }).catch((err) => console.error('Error getting user email:', err));
-    
     monday.listen('context', async (res) => {
       console.log('Full Context:', JSON.stringify(res.data, null, 2));
+
+      // Get current user's email for Jira reporter field
+      const userId = res.data.user?.id || res.data.userId;
+      if (userId) {
+        try {
+          const userResult = await monday.api(`query { users(ids: [${userId}]) { email } }`);
+          const email = userResult.data?.users?.[0]?.email;
+          if (email) {
+            setUserEmail(email);
+            console.log('User email from context:', email);
+          } else {
+            console.log('No email returned for user', userId);
+          }
+        } catch (err) {
+          console.error('Error getting user email:', err);
+        }
+      }
       
       // El itemId puede venir en diferentes lugares según el tipo de feature
       const itemId = res.data.itemId 
@@ -187,7 +196,6 @@ function App() {
       if (itemId) {
         await fetchItemData(itemId);
       } else {
-        // Mostrar el contexto para debug
         setError(`No se encontró itemId. Contexto recibido: ${JSON.stringify(res.data, null, 2)}`);
         setLoading(false);
       }
@@ -376,7 +384,7 @@ We are done with the LQA for ${itemName}. We have found this issue:
 Issue: ${updateDescription || subitemName}
 Affected languages: ${languages}
 
-Screenshot: ${screenshot ? `[${screenshot}]` : 'No screenshot available'}
+Screenshot: ${screenshot ? `${screenshot} ` : 'No screenshot available'}
 
 Thanks!`;
 
