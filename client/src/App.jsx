@@ -479,13 +479,27 @@ Thanks!`;
       const startTime = Date.now();
       const interval = setInterval(async () => {
         try {
-          const query = `query { items(ids: [${subitemId}]) { column_values(ids: ["${COLUMN_IDS.jiraIssueLink}"]) { text } } }`;
+          const query = `query { items(ids: [${subitemId}]) { column_values(ids: ["${COLUMN_IDS.jiraIssueLink}"]) { text value } } }`;
           const result = await monday.api(query);
-          const linkText = result.data?.items?.[0]?.column_values?.[0]?.text;
+          const col = result.data?.items?.[0]?.column_values?.[0];
 
-          if (linkText && linkText.includes('atlassian.net')) {
+          // Extract URL from value (JSON: {"url":"...","text":"..."}) or fallback to text
+          let jiraUrl = null;
+          if (col?.value) {
+            try {
+              const parsed = JSON.parse(col.value);
+              jiraUrl = parsed.url || null;
+            } catch (e) {}
+          }
+          if (!jiraUrl && col?.text) {
+            // Fallback: extract URL from text like "DOM2-6747 - https://..."
+            const urlMatch = col.text.match(/(https:\/\/[^\s]+)/);
+            jiraUrl = urlMatch ? urlMatch[1] : null;
+          }
+
+          if (jiraUrl && jiraUrl.includes('atlassian.net')) {
             clearInterval(interval);
-            resolve(linkText);
+            resolve(jiraUrl);
           } else if (Date.now() - startTime > POLL_TIMEOUT_MS) {
             clearInterval(interval);
             resolve(null);
