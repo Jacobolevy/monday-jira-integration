@@ -388,7 +388,7 @@ We are done with the LQA for ${itemName}. We have found this issue:
 Issue: ${updateDescription || subitemName}
 Affected languages: ${languages}
 
-Screenshot: [Screenshot link|${screenshot || 'No screenshot available'}]
+Screenshot: ${screenshot || 'No screenshot available'}
 
 Thanks!`;
 
