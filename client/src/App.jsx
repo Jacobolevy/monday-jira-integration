@@ -3,16 +3,19 @@ import mondaySdk from 'monday-sdk-js';
 
 const monday = mondaySdk();
 
-// n8n webhook URL — replace with your actual production URL from n8n
-const N8N_WEBHOOK_URL = 'https://n8n-product.wixprod.net/webhook-test/monday-jira';
-
 // Column IDs configured for the Localization QA board
 const COLUMN_IDS = {
   language: 'dropdown_mkz29ax2',
   priority: 'color_mkz4hv6s',
   typeOfIssue: 'color_mkz2tbex',
-  jiraLink: 'link_mkz3e37y'  // Link de Jira en el item padre
+  jiraLink: 'link_mkz3e37y',          // Link de Jira en el item padre
+  jiraRequest: 'long_text_mm0cavf7',   // Subitem: JSON data for n8n to process
+  jiraIssueLink: 'link_mkz21j9b'       // Subitem: Jira link written back by n8n
 };
+
+// Polling config
+const POLL_INTERVAL_MS = 3000;   // Check every 3 seconds
+const POLL_TIMEOUT_MS = 120000;  // Give up after 2 minutes
 
 // Smart Label Mapping based on Type of Issue + Keywords
 const LABEL_MAPPING = {
@@ -198,6 +201,9 @@ function App() {
         query {
           items(ids: [${subitemId}]) {
             name
+            board {
+              id
+            }
             parent_item {
               id
               name
@@ -374,17 +380,23 @@ Screenshot: ${screenshot || 'No screenshot available'}
 
 Thanks!`;
 
+      // Check if a Jira ticket was already created for this subitem
+      const existingJiraLink = getColumnText(COLUMN_IDS.jiraIssueLink);
+
       setData({
         space,
         summary,
         description,
         priority,
-        labels,  // Now an array of smart labels
-        typeOfIssue,  // Keep original for reference
+        labels,
+        typeOfIssue,
         screenshot,
         languages,
-        // Debug info
-        rawUpdateBody: oldestUpdate?.body || 'No updates found'
+        rawUpdateBody: oldestUpdate?.body || 'No updates found',
+        // Needed for Monday column writes
+        subitemId: subitemId,
+        boardId: subitem.board?.id || '',
+        existingJiraLink
       });
 
     } catch (err) {
@@ -446,50 +458,92 @@ Thanks!`;
     }
   };
 
+  // Extract Jira key from a URL like https://wix.atlassian.net/browse/DOM2-6742
+  const extractKeyFromUrl = (url) => {
+    if (!url) return url;
+    const match = url.match(/\/browse\/([A-Z0-9]+-\d+)/i);
+    return match ? match[1].toUpperCase() : url;
+  };
+
+  // Poll the subitem's Jira link column until it gets a value
+  const pollForJiraLink = (subitemId) => {
+    return new Promise((resolve) => {
+      const startTime = Date.now();
+      const interval = setInterval(async () => {
+        try {
+          const query = `query { items(ids: [${subitemId}]) { column_values(ids: ["${COLUMN_IDS.jiraIssueLink}"]) { text } } }`;
+          const result = await monday.api(query);
+          const linkText = result.data?.items?.[0]?.column_values?.[0]?.text;
+
+          if (linkText && linkText.includes('atlassian.net')) {
+            clearInterval(interval);
+            resolve(linkText);
+          } else if (Date.now() - startTime > POLL_TIMEOUT_MS) {
+            clearInterval(interval);
+            resolve(null);
+          }
+        } catch (err) {
+          console.error('Polling error:', err);
+          if (Date.now() - startTime > POLL_TIMEOUT_MS) {
+            clearInterval(interval);
+            resolve(null);
+          }
+        }
+      }, POLL_INTERVAL_MS);
+    });
+  };
+
   const createJiraTicket = async () => {
     setCreating(true);
     setError(null);
     try {
-      const response = await fetch(N8N_WEBHOOK_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectKey: data.space,
-          summary: data.summary,
-          description: data.description,
-          issueType: 'Bug',
-          labels: data.labels,
-          reporterEmail: userEmail
-        })
+      // 1. Write the ticket data as JSON to the Jira Request column
+      const requestData = JSON.stringify({
+        projectKey: data.space,
+        summary: data.summary,
+        description: data.description,
+        issueType: 'Bug',
+        labels: data.labels,
+        reporterEmail: userEmail,
+        subitemId: data.subitemId,
+        boardId: data.boardId
       });
-      const result = await response.json();
-      // Handle MCP response format: { content: [{ type: "text", text: { key, id, self } }] }
-      let jiraKey = null;
-      if (result.content?.[0]?.text?.key) {
-        jiraKey = result.content[0].text.key;
-      } else if (result.jiraKey) {
-        jiraKey = result.jiraKey;
-      } else if (result.key) {
-        jiraKey = result.key;
-      }
 
-      if (jiraKey) {
-        const jiraData = {
-          jiraKey,
-          jiraUrl: `https://wix.atlassian.net/browse/${jiraKey}`
-        };
-        setJiraResult(jiraData);
+      const columnValue = JSON.stringify({ text: requestData });
+
+      const mutation = `
+        mutation {
+          change_column_value(
+            board_id: ${data.boardId},
+            item_id: ${data.subitemId},
+            column_id: "${COLUMN_IDS.jiraRequest}",
+            value: ${JSON.stringify(columnValue)}
+          ) {
+            id
+          }
+        }
+      `;
+
+      await monday.api(mutation);
+      console.log('Jira request written to Monday column');
+
+      // 2. Poll for the Jira link to appear
+      const jiraUrl = await pollForJiraLink(data.subitemId);
+
+      if (jiraUrl) {
+        const jiraKey = extractKeyFromUrl(jiraUrl);
+        setJiraResult({ jiraKey, jiraUrl });
         monday.execute('notice', {
           message: `Jira ticket ${jiraKey} created!`,
           type: 'success',
           timeout: 3000
         });
       } else {
-        setError(result.error || 'Failed to create Jira ticket');
+        setError('Timeout waiting for n8n to create the ticket. Check that the n8n workflow is active.');
       }
     } catch (err) {
       console.error('Error creating Jira ticket:', err);
-      setError(`Error creating ticket: ${err.message}`);
+      setError(`Error: ${err.message}`);
     } finally {
       setCreating(false);
     }
@@ -569,6 +623,15 @@ Thanks!`;
         </div>
       </header>
 
+      {data.existingJiraLink && (
+        <div className="inline-error" style={{ background: '#e3f2fd', color: '#1565c0', borderColor: '#90caf9' }}>
+          <span>ℹ️</span> A Jira ticket already exists:{' '}
+          <a href={data.existingJiraLink} target="_blank" rel="noopener noreferrer">
+            {extractKeyFromUrl(data.existingJiraLink)}
+          </a>
+        </div>
+      )}
+
       <main className="fields-container">
         <CopyableField
           label="Space"
@@ -644,13 +707,15 @@ Thanks!`;
         <button
           className="btn btn-primary btn-create"
           onClick={createJiraTicket}
-          disabled={creating}
+          disabled={creating || !!data.existingJiraLink}
         >
           {creating ? (
             <>
               <span className="btn-spinner"></span>
-              Creating...
+              Waiting for n8n...
             </>
+          ) : data.existingJiraLink ? (
+            'Ticket Already Created'
           ) : (
             'Create Jira Ticket'
           )}

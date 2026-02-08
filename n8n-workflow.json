@@ -1,61 +1,105 @@
 {
   "name": "Monday to Jira Sync",
+  "meta": {
+    "description": "Polls Monday for pending Jira requests, creates tickets via MCP, writes links back."
+  },
   "nodes": [
     {
       "parameters": {
-        "httpMethod": "POST",
-        "path": "monday-jira",
-        "responseMode": "responseNode",
-        "options": {
-          "rawBody": false
+        "rule": {
+          "interval": [
+            {
+              "field": "seconds",
+              "secondsInterval": 30
+            }
+          ]
         }
       },
-      "name": "Webhook",
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2,
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
       "position": [250, 300],
-      "webhookId": "monday-jira"
+      "notes": "Polls every 30 seconds. Adjust interval as needed."
     },
     {
       "parameters": {
-        "toolName": "create_issue",
-        "toolDescription": "Create a Jira issue using the Jira MCP",
-        "inputMapping": "={{ JSON.stringify({ project_key: $json.body.projectKey, summary: $json.body.summary, description: $json.body.description, issue_type: $json.body.issueType, labels: $json.body.labels }) }}"
+        "resource": "boardItem",
+        "operation": "getAll",
+        "boardId": "18393273008",
+        "returnAll": true
+      },
+      "name": "Get Board Items",
+      "type": "n8n-nodes-base.monday",
+      "typeVersion": 1,
+      "position": [450, 300],
+      "notes": "Gets all items from the Localization QA board. Uses Monday API credentials."
+    },
+    {
+      "parameters": {
+        "jsCode": "// For each parent item, query its subitems and find those with pending Jira requests\nconst results = [];\n\nfor (const item of $input.all()) {\n  const itemId = item.json.id;\n  \n  // Query subitems with their column values\n  const query = `query {\n    items(ids: [${itemId}]) {\n      subitems {\n        id\n        name\n        board {\n          id\n        }\n        column_values(ids: [\"long_text_mm0cavf7\", \"link_mkz21j9b\"]) {\n          id\n          text\n        }\n      }\n    }\n  }`;\n  \n  try {\n    const response = await $nodeContext.helpers.httpRequestWithAuthentication.call(this, 'mondayApi', {\n      method: 'POST',\n      url: 'https://api.monday.com/v2',\n      body: { query },\n      json: true\n    });\n    \n    const subitems = response.data?.items?.[0]?.subitems || [];\n    \n    for (const subitem of subitems) {\n      const requestCol = subitem.column_values.find(c => c.id === 'long_text_mm0cavf7');\n      const linkCol = subitem.column_values.find(c => c.id === 'link_mkz21j9b');\n      \n      // Only process subitems that have a pending request and no existing Jira link\n      if (requestCol?.text && requestCol.text.trim() !== '') {\n        try {\n          const requestData = JSON.parse(requestCol.text);\n          results.push({\n            json: {\n              ...requestData,\n              subitemId: subitem.id,\n              subitemName: subitem.name,\n              boardId: subitem.board?.id || requestData.boardId\n            }\n          });\n        } catch (e) {\n          // Skip invalid JSON\n          console.log(`Invalid JSON in subitem ${subitem.id}:`, e.message);\n        }\n      }\n    }\n  } catch (e) {\n    console.log(`Error querying subitems for item ${itemId}:`, e.message);\n  }\n}\n\nreturn results.length > 0 ? results : [];"
+      },
+      "name": "Find Pending Requests",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300],
+      "notes": "Queries subitems of each parent item. Filters for subitems with non-empty Jira Request column. Parses the JSON data."
+    },
+    {
+      "parameters": {
+        "toolName": "jirabot__create-issue",
+        "inputMapping": "={{ JSON.stringify({ project_key: $json.projectKey, summary: $json.summary, description: $json.description, issue_type_id: '10024', labels: $json.labels }) }}"
       },
       "name": "Jira MCP - Create Issue",
       "type": "n8n-nodes-base.mcpClientTool",
       "typeVersion": 1,
-      "position": [500, 300],
-      "notes": "Connect this to your company's Jira MCP server. Configure the MCP credential to point to your Jira MCP endpoint. The tool name and parameters depend on your MCP server configuration — adjust as needed after testing."
+      "position": [850, 300],
+      "notes": "Creates Jira ticket via MCP. Adjust field names to match your MCP configuration."
     },
     {
       "parameters": {
-        "respondWith": "json",
-        "responseBody": "={{ { success: true, jiraKey: $json.key || $json.issueKey || 'UNKNOWN', jiraUrl: 'https://wix.atlassian.net/browse/' + ($json.key || $json.issueKey || 'UNKNOWN') } }}",
-        "options": {
-          "responseCode": 200,
-          "responseHeaders": {
-            "entries": [
-              {
-                "name": "Access-Control-Allow-Origin",
-                "value": "*"
-              },
-              {
-                "name": "Access-Control-Allow-Headers",
-                "value": "Content-Type"
-              }
-            ]
-          }
-        }
+        "jsCode": "// Extract Jira key from MCP response\nconst mcpResponse = $input.first().json;\nlet jiraKey = null;\n\nif (mcpResponse.content?.[0]?.text?.key) {\n  jiraKey = mcpResponse.content[0].text.key;\n} else if (mcpResponse.key) {\n  jiraKey = mcpResponse.key;\n}\n\nif (!jiraKey) {\n  throw new Error('Could not extract Jira key from MCP response: ' + JSON.stringify(mcpResponse));\n}\n\nconst jiraUrl = `https://wix.atlassian.net/browse/${jiraKey}`;\nconst boardId = $input.first().json.boardId;\nconst subitemId = $input.first().json.subitemId;\n\nreturn [{ json: { jiraKey, jiraUrl, boardId, subitemId } }];"
       },
-      "name": "Respond Success",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1,
-      "position": [750, 300]
+      "name": "Extract Jira Key",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 300],
+      "notes": "Parses the MCP response to extract the Jira ticket key and build the URL."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Write the Jira link back to the subitem and clear the request column\nconst { jiraKey, jiraUrl, boardId, subitemId } = $input.first().json;\n\n// 1. Write Jira link to the link column\nconst linkValue = JSON.stringify({ url: jiraUrl, text: jiraKey });\nconst writeLinkMutation = `mutation {\n  change_column_value(\n    board_id: ${boardId},\n    item_id: ${subitemId},\n    column_id: \"link_mkz21j9b\",\n    value: ${JSON.stringify(linkValue)}\n  ) { id }\n}`;\n\nawait $nodeContext.helpers.httpRequestWithAuthentication.call(this, 'mondayApi', {\n  method: 'POST',\n  url: 'https://api.monday.com/v2',\n  body: { query: writeLinkMutation },\n  json: true\n});\n\n// 2. Clear the request column\nconst clearValue = JSON.stringify({ text: '' });\nconst clearMutation = `mutation {\n  change_column_value(\n    board_id: ${boardId},\n    item_id: ${subitemId},\n    column_id: \"long_text_mm0cavf7\",\n    value: ${JSON.stringify(clearValue)}\n  ) { id }\n}`;\n\nawait $nodeContext.helpers.httpRequestWithAuthentication.call(this, 'mondayApi', {\n  method: 'POST',\n  url: 'https://api.monday.com/v2',\n  body: { query: clearMutation },\n  json: true\n});\n\nreturn [{ json: { success: true, jiraKey, jiraUrl, subitemId } }];"
+      },
+      "name": "Write Link & Clear Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300],
+      "notes": "Writes the Jira link to the subitem's link column and clears the request column."
     }
   ],
   "connections": {
-    "Webhook": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Board Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Board Items": {
+      "main": [
+        [
+          {
+            "node": "Find Pending Requests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Pending Requests": {
       "main": [
         [
           {
@@ -70,7 +114,18 @@
       "main": [
         [
           {
-            "node": "Respond Success",
+            "node": "Extract Jira Key",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Jira Key": {
+      "main": [
+        [
+          {
+            "node": "Write Link & Clear Request",
             "type": "main",
             "index": 0
           }
