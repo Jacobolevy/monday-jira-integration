@@ -4,7 +4,7 @@ import mondaySdk from 'monday-sdk-js';
 const monday = mondaySdk();
 
 // n8n webhook URL — replace with your actual production URL from n8n
-const N8N_WEBHOOK_URL = 'https://n8n-product.wixprod.net/webhook/monday-jira';
+const N8N_WEBHOOK_URL = 'https://n8n-product.wixprod.net/webhook-test/monday-jira';
 
 // Column IDs configured for the Localization QA board
 const COLUMN_IDS = {
