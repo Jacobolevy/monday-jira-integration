@@ -166,12 +166,12 @@ function App() {
     monday.execute('valueCreatedForUser');
 
     // Get current user's email for Jira reporter field
-    monday.get('currentUser').then((res) => {
-      if (res.data?.email) {
-        setUserEmail(res.data.email);
-        console.log('Current user email:', res.data.email);
+    monday.api('query { me { email } }').then((res) => {
+      if (res.data?.me?.email) {
+        setUserEmail(res.data.me.email);
+        console.log('Current user email:', res.data.me.email);
       }
-    }).catch((err) => console.error('Error getting user:', err));
+    }).catch((err) => console.error('Error getting user email:', err));
     
     monday.listen('context', async (res) => {
       console.log('Full Context:', JSON.stringify(res.data, null, 2));
@@ -376,7 +376,7 @@ We are done with the LQA for ${itemName}. We have found this issue:
 Issue: ${updateDescription || subitemName}
 Affected languages: ${languages}
 
-Screenshot: ${screenshot || 'No screenshot available'}
+Screenshot: ${screenshot ? `[${screenshot}]` : 'No screenshot available'}
 
 Thanks!`;
 
