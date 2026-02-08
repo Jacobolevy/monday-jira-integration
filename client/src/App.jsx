@@ -157,9 +157,18 @@ function App() {
   const [copiedField, setCopiedField] = useState(null);
   const [creating, setCreating] = useState(false);
   const [jiraResult, setJiraResult] = useState(null);
+  const [userEmail, setUserEmail] = useState(null);
 
   useEffect(() => {
     monday.execute('valueCreatedForUser');
+
+    // Get current user's email for Jira reporter field
+    monday.get('currentUser').then((res) => {
+      if (res.data?.email) {
+        setUserEmail(res.data.email);
+        console.log('Current user email:', res.data.email);
+      }
+    }).catch((err) => console.error('Error getting user:', err));
     
     monday.listen('context', async (res) => {
       console.log('Full Context:', JSON.stringify(res.data, null, 2));
@@ -449,7 +458,8 @@ Thanks!`;
           summary: data.summary,
           description: data.description,
           issueType: 'Bug',
-          labels: data.labels
+          labels: data.labels,
+          reporterEmail: userEmail
         })
       });
       const result = await response.json();
