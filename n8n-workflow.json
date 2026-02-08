@@ -1,139 +1,99 @@
 {
   "name": "Monday to Jira Sync",
   "meta": {
-    "description": "Polls Monday for pending Jira requests, creates tickets via MCP, writes links back."
+    "description": "Polls Monday for pending Jira requests in subitems, resolves reporter, creates tickets via MCP, writes links back."
   },
   "nodes": [
     {
-      "parameters": {
-        "rule": {
-          "interval": [
-            {
-              "field": "seconds",
-              "secondsInterval": 30
-            }
-          ]
-        }
-      },
       "name": "Schedule Trigger",
       "type": "n8n-nodes-base.scheduleTrigger",
-      "typeVersion": 1,
-      "position": [250, 300],
-      "notes": "Polls every 30 seconds. Adjust interval as needed."
+      "notes": "Polls every 30 seconds.",
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "seconds", "secondsInterval": 30 }]
+        }
+      }
     },
     {
+      "name": "HTTP Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "notes": "Gets all parent item IDs from the Localization QA board.",
       "parameters": {
-        "resource": "boardItem",
-        "operation": "getAll",
-        "boardId": "18393273008",
-        "returnAll": true
-      },
-      "name": "Get Board Items",
-      "type": "n8n-nodes-base.monday",
-      "typeVersion": 1,
-      "position": [450, 300],
-      "notes": "Gets all items from the Localization QA board. Uses Monday API credentials."
+        "method": "POST",
+        "url": "https://api.monday.com/v2",
+        "body": "{\"query\": \"{ boards(ids: [18393273008]) { items_page(limit: 500) { items { id } } } }\"}"
+      }
     },
     {
-      "parameters": {
-        "jsCode": "// For each parent item, query its subitems and find those with pending Jira requests\nconst results = [];\n\nfor (const item of $input.all()) {\n  const itemId = item.json.id;\n  \n  // Query subitems with their column values\n  const query = `query {\n    items(ids: [${itemId}]) {\n      subitems {\n        id\n        name\n        board {\n          id\n        }\n        column_values(ids: [\"long_text_mm0cavf7\", \"link_mkz21j9b\"]) {\n          id\n          text\n        }\n      }\n    }\n  }`;\n  \n  try {\n    const response = await $nodeContext.helpers.httpRequestWithAuthentication.call(this, 'mondayApi', {\n      method: 'POST',\n      url: 'https://api.monday.com/v2',\n      body: { query },\n      json: true\n    });\n    \n    const subitems = response.data?.items?.[0]?.subitems || [];\n    \n    for (const subitem of subitems) {\n      const requestCol = subitem.column_values.find(c => c.id === 'long_text_mm0cavf7');\n      const linkCol = subitem.column_values.find(c => c.id === 'link_mkz21j9b');\n      \n      // Only process subitems that have a pending request and no existing Jira link\n      if (requestCol?.text && requestCol.text.trim() !== '') {\n        try {\n          const requestData = JSON.parse(requestCol.text);\n          results.push({\n            json: {\n              ...requestData,\n              subitemId: subitem.id,\n              subitemName: subitem.name,\n              boardId: subitem.board?.id || requestData.boardId\n            }\n          });\n        } catch (e) {\n          // Skip invalid JSON\n          console.log(`Invalid JSON in subitem ${subitem.id}:`, e.message);\n        }\n      }\n    }\n  } catch (e) {\n    console.log(`Error querying subitems for item ${itemId}:`, e.message);\n  }\n}\n\nreturn results.length > 0 ? results : [];"
-      },
-      "name": "Find Pending Requests",
+      "name": "Get subitem data",
       "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [650, 300],
-      "notes": "Queries subitems of each parent item. Filters for subitems with non-empty Jira Request column. Parses the JSON data."
+      "notes": "Takes parent item IDs, builds a query to fetch subitems with column_values, filters for subitems with pending Jira requests (non-empty long_text_mm0cavf7). Outputs the parsed JSON ticket data.",
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Step 1: Extract parent item IDs and build subitems query\nconst items = $input.first().json.data.boards[0].items_page.items;\nconst ids = items.map(i => i.id).join(',');\nconst query = `{ items(ids: [${ids}]) { id subitems { id name board { id } column_values(ids: [\"long_text_mm0cavf7\", \"link_mkz21j9b\"]) { id text value } } } }`;\n\n// Step 2: Fetch subitems via Monday API (uses same auth as HTTP Request node)\n// NOTE: This step is done via a second HTTP Request node in the actual workflow.\n// The code here filters the response for pending requests.\n\nconst response = $input.first().json;\nconst parentItems = response.data?.items || response.data?.boards?.[0]?.items_page?.items || [];\nconst results = [];\n\nfor (const item of parentItems) {\n  if (!item.subitems) continue;\n  for (const subitem of item.subitems) {\n    const requestCol = subitem.column_values.find(c => c.id === 'long_text_mm0cavf7');\n    let requestText = requestCol?.text || '';\n    if (!requestText && requestCol?.value) {\n      try { requestText = JSON.parse(requestCol.value).text || ''; } catch (e) {}\n    }\n    if (requestText.trim() !== '') {\n      try {\n        const requestData = JSON.parse(requestText);\n        results.push({ json: { ...requestData, subitemId: subitem.id, subitemName: subitem.name, boardId: subitem.board?.id || requestData.boardId } });\n      } catch (e) {}\n    }\n  }\n}\n\nreturn results;"
+      }
     },
     {
+      "name": "Get reporter email",
+      "type": "n8n-nodes-base.mcpClientTool",
+      "notes": "Uses jirabot__get_user to look up the Jira user by the reporterEmail from Monday's Person column.",
+      "parameters": {
+        "toolName": "jirabot__get_user",
+        "inputMapping": "email: {{ $json.reporterEmail }}"
+      }
+    },
+    {
+      "name": "Merge reporter data",
+      "type": "n8n-nodes-base.code",
+      "notes": "Extracts accountId from get_user response and merges with original ticket data.",
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const userResponse = $input.first().json;\nconst accountId = userResponse.content?.[0]?.text?.[0]?.accountId || null;\nconst originalData = $('Get subitem data').first().json;\n\nreturn [{ json: { ...originalData, reporterAccountId: accountId } }];"
+      }
+    },
+    {
+      "name": "Create Jira",
+      "type": "n8n-nodes-base.mcpClientTool",
+      "notes": "Creates Jira ticket via MCP. Fields: projectKey, summary, description, issueTypeId (10024 = Bug). customFields includes labels and reporter accountId.",
       "parameters": {
         "toolName": "jirabot__create-issue",
-        "inputMapping": "={{ JSON.stringify({ project_key: $json.projectKey, summary: $json.summary, description: $json.description, issue_type_id: '10024', labels: $json.labels }) }}"
-      },
-      "name": "Jira MCP - Create Issue",
-      "type": "n8n-nodes-base.mcpClientTool",
-      "typeVersion": 1,
-      "position": [850, 300],
-      "notes": "Creates Jira ticket via MCP. Adjust field names to match your MCP configuration."
+        "fields": {
+          "projectKey": "{{ $json.projectKey }}",
+          "summary": "{{ $json.summary }}",
+          "description": "{{ $json.description }}",
+          "issueTypeId": "10024",
+          "customFields": "{{ JSON.stringify(Object.assign({ \"labels\": $json.labels }, $json.reporterAccountId ? { \"reporter\": { \"accountId\": $json.reporterAccountId } } : {})) }}"
+        }
+      }
     },
     {
-      "parameters": {
-        "jsCode": "// Extract Jira key from MCP response\nconst mcpResponse = $input.first().json;\nlet jiraKey = null;\n\nif (mcpResponse.content?.[0]?.text?.key) {\n  jiraKey = mcpResponse.content[0].text.key;\n} else if (mcpResponse.key) {\n  jiraKey = mcpResponse.key;\n}\n\nif (!jiraKey) {\n  throw new Error('Could not extract Jira key from MCP response: ' + JSON.stringify(mcpResponse));\n}\n\nconst jiraUrl = `https://wix.atlassian.net/browse/${jiraKey}`;\nconst boardId = $input.first().json.boardId;\nconst subitemId = $input.first().json.subitemId;\n\nreturn [{ json: { jiraKey, jiraUrl, boardId, subitemId } }];"
-      },
-      "name": "Extract Jira Key",
+      "name": "Write Jira ticket",
       "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [1050, 300],
-      "notes": "Parses the MCP response to extract the Jira ticket key and build the URL."
+      "notes": "Extracts Jira key from MCP response and prepares data for writing back to Monday.",
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const mcpResponse = $input.first().json;\nlet jiraKey = null;\nif (mcpResponse.content?.[0]?.text?.key) { jiraKey = mcpResponse.content[0].text.key; }\nelse if (mcpResponse.key) { jiraKey = mcpResponse.key; }\nif (!jiraKey) { throw new Error('Could not extract Jira key: ' + JSON.stringify(mcpResponse)); }\nconst prevData = $('Get subitem data').first().json;\nreturn [{ json: { jiraKey, jiraUrl: `https://wix.atlassian.net/browse/${jiraKey}`, boardId: prevData.boardId, subitemId: prevData.subitemId } }];"
+      }
     },
     {
+      "name": "Copy ticket URL to Monday",
+      "type": "n8n-nodes-base.httpRequest",
+      "notes": "Writes Jira link to subitem link column (link_mkz21j9b) and clears the request column (long_text_mm0cavf7).",
       "parameters": {
-        "jsCode": "// Write the Jira link back to the subitem and clear the request column\nconst { jiraKey, jiraUrl, boardId, subitemId } = $input.first().json;\n\n// 1. Write Jira link to the link column\nconst linkValue = JSON.stringify({ url: jiraUrl, text: jiraKey });\nconst writeLinkMutation = `mutation {\n  change_column_value(\n    board_id: ${boardId},\n    item_id: ${subitemId},\n    column_id: \"link_mkz21j9b\",\n    value: ${JSON.stringify(linkValue)}\n  ) { id }\n}`;\n\nawait $nodeContext.helpers.httpRequestWithAuthentication.call(this, 'mondayApi', {\n  method: 'POST',\n  url: 'https://api.monday.com/v2',\n  body: { query: writeLinkMutation },\n  json: true\n});\n\n// 2. Clear the request column\nconst clearValue = JSON.stringify({ text: '' });\nconst clearMutation = `mutation {\n  change_column_value(\n    board_id: ${boardId},\n    item_id: ${subitemId},\n    column_id: \"long_text_mm0cavf7\",\n    value: ${JSON.stringify(clearValue)}\n  ) { id }\n}`;\n\nawait $nodeContext.helpers.httpRequestWithAuthentication.call(this, 'mondayApi', {\n  method: 'POST',\n  url: 'https://api.monday.com/v2',\n  body: { query: clearMutation },\n  json: true\n});\n\nreturn [{ json: { success: true, jiraKey, jiraUrl, subitemId } }];"
-      },
-      "name": "Write Link & Clear Request",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [1250, 300],
-      "notes": "Writes the Jira link to the subitem's link column and clears the request column."
+        "method": "POST",
+        "url": "https://api.monday.com/v2",
+        "body": "{{ JSON.stringify({ query: 'mutation { write_link: change_column_value(board_id: ' + $json.boardId + ', item_id: ' + $json.subitemId + ', column_id: \"link_mkz21j9b\", value: ' + JSON.stringify(JSON.stringify({ url: $json.jiraUrl, text: $json.jiraKey })) + ') { id } clear_request: change_column_value(board_id: ' + $json.boardId + ', item_id: ' + $json.subitemId + ', column_id: \"long_text_mm0cavf7\", value: ' + JSON.stringify(JSON.stringify({ text: '' })) + ') { id } }' }) }}"
+      }
     }
   ],
   "connections": {
-    "Schedule Trigger": {
-      "main": [
-        [
-          {
-            "node": "Get Board Items",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Get Board Items": {
-      "main": [
-        [
-          {
-            "node": "Find Pending Requests",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Find Pending Requests": {
-      "main": [
-        [
-          {
-            "node": "Jira MCP - Create Issue",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Jira MCP - Create Issue": {
-      "main": [
-        [
-          {
-            "node": "Extract Jira Key",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Extract Jira Key": {
-      "main": [
-        [
-          {
-            "node": "Write Link & Clear Request",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    }
+    "Schedule Trigger": { "main": [[{ "node": "HTTP Request" }]] },
+    "HTTP Request": { "main": [[{ "node": "Get subitem data" }]] },
+    "Get subitem data": { "main": [[{ "node": "Get reporter email" }]] },
+    "Get reporter email": { "main": [[{ "node": "Merge reporter data" }]] },
+    "Merge reporter data": { "main": [[{ "node": "Create Jira" }]] },
+    "Create Jira": { "main": [[{ "node": "Write Jira ticket" }]] },
+    "Write Jira ticket": { "main": [[{ "node": "Copy ticket URL to Monday" }]] }
   },
-  "settings": {
-    "executionOrder": "v1"
-  }
+  "settings": { "executionOrder": "v1" }
 }
