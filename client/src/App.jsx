@@ -3,7 +3,10 @@ import mondaySdk from 'monday-sdk-js';
 
 const monday = mondaySdk();
 
-// 🔧 TUS COLUMN IDs CONFIGURADOS
+// n8n webhook URL — replace with your actual production URL from n8n
+const N8N_WEBHOOK_URL = 'https://<your-n8n>/webhook/monday-jira';
+
+// Column IDs configured for the Localization QA board
 const COLUMN_IDS = {
   language: 'dropdown_mkz29ax2',
   priority: 'color_mkz4hv6s',
@@ -152,6 +155,8 @@ function App() {
   const [error, setError] = useState(null);
   const [data, setData] = useState(null);
   const [copiedField, setCopiedField] = useState(null);
+  const [creating, setCreating] = useState(false);
+  const [jiraResult, setJiraResult] = useState(null);
 
   useEffect(() => {
     monday.execute('valueCreatedForUser');
@@ -432,6 +437,40 @@ Thanks!`;
     }
   };
 
+  const createJiraTicket = async () => {
+    setCreating(true);
+    setError(null);
+    try {
+      const response = await fetch(N8N_WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectKey: data.space,
+          summary: data.summary,
+          description: data.description,
+          issueType: 'Bug',
+          labels: data.labels
+        })
+      });
+      const result = await response.json();
+      if (result.success) {
+        setJiraResult(result);
+        monday.execute('notice', {
+          message: `Jira ticket ${result.jiraKey} created!`,
+          type: 'success',
+          timeout: 3000
+        });
+      } else {
+        setError(result.error || 'Failed to create Jira ticket');
+      }
+    } catch (err) {
+      console.error('Error creating Jira ticket:', err);
+      setError(`Error creating ticket: ${err.message}`);
+    } finally {
+      setCreating(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="loading-container">
@@ -441,11 +480,47 @@ Thanks!`;
     );
   }
 
-  if (error) {
+  if (error && !data) {
     return (
       <div className="error-container">
         <span className="error-icon">⚠️</span>
         <p>{error}</p>
+      </div>
+    );
+  }
+
+  if (jiraResult) {
+    return (
+      <div className="app-container">
+        <div className="success-container">
+          <div className="success-icon">&#10003;</div>
+          <h2>Jira Ticket Created</h2>
+          <a
+            className="jira-link"
+            href={jiraResult.jiraUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {jiraResult.jiraKey}
+          </a>
+          <p className="success-summary">{data.summary}</p>
+          <div className="success-actions">
+            <button
+              className="btn btn-primary"
+              onClick={() => {
+                copyToClipboard(jiraResult.jiraUrl, 'Jira URL');
+              }}
+            >
+              {copiedField === 'Jira URL' ? 'Copied!' : 'Copy Link'}
+            </button>
+            <button
+              className="btn btn-secondary"
+              onClick={() => monday.execute('closeAppFeatureModal')}
+            >
+              Close
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
@@ -466,7 +541,7 @@ Thanks!`;
         </div>
         <div className="header-text">
           <h1>Create Jira Ticket</h1>
-          <p>Copy each field and paste in Jira</p>
+          <p>Review the fields below, then create the ticket</p>
         </div>
       </header>
 
@@ -526,21 +601,35 @@ Thanks!`;
         </div>
       </main>
 
+      {error && (
+        <div className="inline-error">
+          <span>⚠️</span> {error}
+        </div>
+      )}
+
       <footer className="footer">
         <button
-          className="btn btn-primary"
+          className="btn btn-secondary"
           onClick={() => {
             const allFields = `Space: ${data.space}\n\nSummary: ${data.summary}\n\nDescription:\n${data.description}\n\nPriority: ${data.priority}\nLabels: ${data.labels?.join(', ') || ''}`;
             copyToClipboard(allFields, 'All Fields');
           }}
         >
-          📋 Copy All Fields
+          {copiedField === 'All Fields' ? 'Copied!' : 'Copy All Fields'}
         </button>
         <button
-          className="btn btn-secondary"
-          onClick={() => monday.execute('closeAppFeatureModal')}
+          className="btn btn-primary btn-create"
+          onClick={createJiraTicket}
+          disabled={creating}
         >
-          Close
+          {creating ? (
+            <>
+              <span className="btn-spinner"></span>
+              Creating...
+            </>
+          ) : (
+            'Create Jira Ticket'
+          )}
         </button>
       </footer>
     </div>

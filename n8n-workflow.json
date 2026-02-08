@@ -1,102 +1,57 @@
 {
+  "name": "Monday to Jira Sync",
   "nodes": [
     {
       "parameters": {
         "httpMethod": "POST",
-        "path": "monday-trigger",
-        "options": {}
+        "path": "monday-jira",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": false
+        }
       },
       "name": "Webhook",
       "type": "n8n-nodes-base.webhook",
-      "typeVersion": 1,
-      "position": [
-        250,
-        300
-      ]
+      "typeVersion": 2,
+      "position": [250, 300],
+      "webhookId": "monday-jira"
     },
     {
       "parameters": {
-        "resource": "boardItem",
-        "operation": "get",
-        "itemId": "={{$json.body.event.pulseId}}",
-        "returnFields": [
-          "name",
-          "parent_item",
-          "column_values"
-        ]
+        "toolName": "create_issue",
+        "toolDescription": "Create a Jira issue using the Jira MCP",
+        "inputMapping": "={{ JSON.stringify({ project_key: $json.body.projectKey, summary: $json.body.summary, description: $json.body.description, issue_type: $json.body.issueType, labels: $json.body.labels }) }}"
       },
-      "name": "Get Subitem",
-      "type": "n8n-nodes-base.mondayCom",
+      "name": "Jira MCP - Create Issue",
+      "type": "n8n-nodes-base.mcpClientTool",
       "typeVersion": 1,
-      "position": [
-        450,
-        300
-      ],
-      "credentials": {
-        "mondayComApi": {
-          "id": "YOUR_MONDAY_CREDENTIAL_ID",
-          "name": "Monday.com account"
-        }
-      }
+      "position": [500, 300],
+      "notes": "Connect this to your company's Jira MCP server. Configure the MCP credential to point to your Jira MCP endpoint. The tool name and parameters depend on your MCP server configuration — adjust as needed after testing."
     },
     {
       "parameters": {
-        "resource": "boardItem",
-        "operation": "get",
-        "itemId": "={{$json.parent_item.id}}",
-        "returnFields": [
-          "column_values"
-        ]
-      },
-      "name": "Get Parent Item",
-      "type": "n8n-nodes-base.mondayCom",
-      "typeVersion": 1,
-      "position": [
-        650,
-        300
-      ],
-      "credentials": {
-        "mondayComApi": {
-          "id": "YOUR_MONDAY_CREDENTIAL_ID",
-          "name": "Monday.com account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "functionCode": "// Logic to parse Project Key and Updates\nconst parentCols = items[0].json.column_values;\nconst projectLinkCol = parentCols.find(c => c.id === 'link_mkz3e37y');\nlet projectKey = 'DOM2'; // Fallback\n\nif (projectLinkCol && projectLinkCol.value) {\n  try {\n    const urlVal = JSON.parse(projectLinkCol.value).url;\n    const match = urlVal.match(/selectedIssue=([A-Z0-9]+)-/);\n    if (match) projectKey = match[1];\n  } catch(e) {}\n}\n\n// Logic for Screenshot (Assuming we might fetch updates in another node or mock it here)\nconst screenshotLink = 'http://example.com/screenshot.png'; // Update this logic if adding specific Update Fetch node\n\nreturn {\n  projectKey,\n  summary: '[LOC] ' + $('Get Subitem').item.json.name,\n  description: 'Automated ticket from Monday. Screenshot: ' + screenshotLink,\n  issuetype: 'Bug'\n};"
-      },
-      "name": "Prepare Data",
-      "type": "n8n-nodes-base.function",
-      "typeVersion": 1,
-      "position": [
-        850,
-        300
-      ]
-    },
-    {
-      "parameters": {
-        "project": "={{$json.projectKey}}",
-        "issueType": "={{$json.issuetype}}",
-        "summary": "={{$json.summary}}",
-        "description": "={{$json.description}}",
-        "additionalFields": {
-          "labels": []
+        "respondWith": "json",
+        "responseBody": "={{ { success: true, jiraKey: $json.key || $json.issueKey || 'UNKNOWN', jiraUrl: 'https://wix.atlassian.net/browse/' + ($json.key || $json.issueKey || 'UNKNOWN') } }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              },
+              {
+                "name": "Access-Control-Allow-Headers",
+                "value": "Content-Type"
+              }
+            ]
+          }
         }
       },
-      "name": "Jira Cloud",
-      "type": "n8n-nodes-base.jira",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
-      "position": [
-        1050,
-        300
-      ],
-      "credentials": {
-        "jiraSoftwareCloudOAuth2Api": {
-          "id": "YOUR_JIRA_CREDENTIAL_ID",
-          "name": "Jira Cloud account"
-        }
-      }
+      "position": [750, 300]
     }
   ],
   "connections": {
@@ -104,45 +59,26 @@
       "main": [
         [
           {
-            "node": "Get Subitem",
+            "node": "Jira MCP - Create Issue",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Get Subitem": {
+    "Jira MCP - Create Issue": {
       "main": [
         [
           {
-            "node": "Get Parent Item",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Get Parent Item": {
-      "main": [
-        [
-          {
-            "node": "Prepare Data",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Prepare Data": {
-      "main": [
-        [
-          {
-            "node": "Jira Cloud",
+            "node": "Respond Success",
             "type": "main",
             "index": 0
           }
         ]
       ]
     }
+  },
+  "settings": {
+    "executionOrder": "v1"
   }
 }
