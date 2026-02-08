@@ -4,7 +4,7 @@ import mondaySdk from 'monday-sdk-js';
 const monday = mondaySdk();
 
 // n8n webhook URL — replace with your actual production URL from n8n
-const N8N_WEBHOOK_URL = 'https://<your-n8n>/webhook/monday-jira';
+const N8N_WEBHOOK_URL = 'https://n8n-product.wixprod.net/webhook-test/monday-jira';
 
 // Column IDs configured for the Localization QA board
 const COLUMN_IDS = {
@@ -453,10 +453,24 @@ Thanks!`;
         })
       });
       const result = await response.json();
-      if (result.success) {
-        setJiraResult(result);
+      // Handle MCP response format: { content: [{ type: "text", text: { key, id, self } }] }
+      let jiraKey = null;
+      if (result.content?.[0]?.text?.key) {
+        jiraKey = result.content[0].text.key;
+      } else if (result.jiraKey) {
+        jiraKey = result.jiraKey;
+      } else if (result.key) {
+        jiraKey = result.key;
+      }
+
+      if (jiraKey) {
+        const jiraData = {
+          jiraKey,
+          jiraUrl: `https://wix.atlassian.net/browse/${jiraKey}`
+        };
+        setJiraResult(jiraData);
         monday.execute('notice', {
-          message: `Jira ticket ${result.jiraKey} created!`,
+          message: `Jira ticket ${jiraKey} created!`,
           type: 'success',
           timeout: 3000
         });
