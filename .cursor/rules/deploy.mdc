@@ -1,0 +1,53 @@
+---
+description: Deployment workflow for the Monday.com app
+globs:
+  - client/**
+alwaysApply: false
+---
+
+# Deployment Workflow
+
+When making changes to the client-side code, always follow this process:
+
+## 1. Build
+
+```bash
+cd client && npm run build
+```
+
+Vite outputs to `client/dist/`. The `dist/` folder is in `.gitignore` — it is NOT committed to git.
+
+## 2. Deploy to Monday.com
+
+```bash
+cd client && npx mapps code:push --client-side -i 12704686 -d dist
+```
+
+- App: **Create Dummy Jira Ticket** (ID: `10813278`)
+- Live version: **v9** (ID: `12704686`)
+- The deploy pushes the `dist/` folder to Monday's CDN directly
+
+## 3. Git commit
+
+After deploying, commit the source code changes (not the build output):
+
+```bash
+git add client/src/ client/vite.config.js
+git commit -m "description of changes"
+git push origin master
+```
+
+## Important notes
+
+- `client/dist/` is gitignored — never try to commit it
+- `client/build/` is a legacy folder tracked in git — do not use it
+- The Monday app version ID may change if a new version is promoted. Check with:
+  ```bash
+  cd client && npx mapps app-version:list -a 10813278
+  ```
+  Use the ID with status `live`.
+
+## n8n Webhook URLs
+
+- **Production**: `https://n8n-product.wixprod.net/webhook/monday-jira`
+- **Test**: `https://n8n-product.wixprod.net/webhook-test/monday-jira` (requires "Listen for test event" in n8n)

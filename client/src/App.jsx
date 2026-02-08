@@ -168,23 +168,6 @@ function App() {
     monday.listen('context', async (res) => {
       console.log('Full Context:', JSON.stringify(res.data, null, 2));
 
-      // Get current user's email for Jira reporter field
-      const userId = res.data.user?.id || res.data.userId;
-      if (userId) {
-        try {
-          const userResult = await monday.api(`query { users(ids: [${userId}]) { email } }`);
-          const email = userResult.data?.users?.[0]?.email;
-          if (email) {
-            setUserEmail(email);
-            console.log('User email from context:', email);
-          } else {
-            console.log('No email returned for user', userId);
-          }
-        } catch (err) {
-          console.error('Error getting user email:', err);
-        }
-      }
-      
       // El itemId puede venir en diferentes lugares según el tipo de feature
       const itemId = res.data.itemId 
         || res.data.itemIds?.[0] 
@@ -218,6 +201,7 @@ function App() {
               column_values {
                 id
                 text
+                value
               }
             }
             column_values {
@@ -271,6 +255,26 @@ function App() {
         const col = parentItem.column_values.find(c => c.id === columnId);
         return col?.text || '';
       };
+
+      // Extraer reporter email de la columna Person del parent item
+      let reporterEmail = null;
+      const personCol = parentItem?.column_values?.find(c => c.id === 'person');
+      if (personCol?.value) {
+        try {
+          const personData = JSON.parse(personCol.value);
+          const personId = personData.personsAndTeams?.[0]?.id;
+          if (personId) {
+            const userResult = await monday.api(`query { users(ids: [${personId}]) { email } }`);
+            reporterEmail = userResult.data?.users?.[0]?.email || null;
+            console.log('Reporter email from Person column:', reporterEmail);
+          }
+        } catch (e) {
+          console.error('Error getting reporter email:', e);
+        }
+      }
+      if (reporterEmail) {
+        setUserEmail(reporterEmail);
+      }
 
       // Extraer Space del link de Jira
       const jiraLinkUrl = getParentColumnText(COLUMN_IDS.jiraLink);
@@ -384,7 +388,8 @@ We are done with the LQA for ${itemName}. We have found this issue:
 Issue: ${updateDescription || subitemName}
 Affected languages: ${languages}
 
-Screenshot: ${screenshot ? `${screenshot} ` : 'No screenshot available'}
+Screenshot:
+${screenshot || 'No screenshot available'}
 
 Thanks!`;
 
@@ -642,6 +647,11 @@ Thanks!`;
         <div className="header-text">
           <h1>Create Jira Ticket</h1>
           <p>Review the fields below, then create the ticket</p>
+          {userEmail ? (
+            <p style={{ fontSize: '11px', color: '#666' }}>Reporter: {userEmail}</p>
+          ) : (
+            <p style={{ fontSize: '11px', color: '#e53935' }}>Reporter email not detected</p>
+          )}
         </div>
       </header>
 
